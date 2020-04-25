@@ -4,9 +4,15 @@ import dotenv from 'dotenv-safe';
 import express from 'express';
 import querystring from 'querystring';
 import SpotifyWebApi from 'spotify-web-api-node';
-import { createUser, getUsersByUsername } from './lib/airtable/request';
+import {
+  createPlaylist,
+  createSong,
+  createUser,
+  getSongsBySpotifyId,
+  getUsersByUsername,
+  updateUser,
+} from './lib/airtable/request';
 import { generateRandomString } from './lib/helpers';
-import { synchDevProd } from './utils/synchDevProd';
 
 dotenv.config();
 
@@ -56,26 +62,10 @@ app.post('/create-user', async (req, res) => {
       error = 'May only take action for the currently authorized Spotify user';
     } else {
       const userInfo = (await spotifyAPI.getMe()).body;
-
-      // Check if in Airtable
-      const existing = await getUsersByUsername(username);
-      console.log(username);
-      console.log(existing);
-      if (existing.length > 1) {
-        error =
-          'Database malformed! Multiple users found in Airtable with this username. Please report an issue so we can fix this for you.';
-        // No user found - create
-      } else if (existing.length === 0) {
-        airtableId = await createUser({
-          name: userInfo.display_name,
-          email: userInfo.email,
-          username: userInfo.id,
-        });
-        success = true;
-        // Otherwise, user exists.
-      } else {
-        airtableId = existing[0].id;
-      }
+      const result = await createUserIfMissing(userInfo);
+      airtableId = result.airtableId;
+      error = result.error;
+      success = result.success;
     }
     if (error) {
       res.send({ success, error });
@@ -84,16 +74,26 @@ app.post('/create-user', async (req, res) => {
     }
   } catch (err) {
     res.send({ success, error: err });
-    console.error('[create-user]: '.concat(err));
+    console.error('[/create-user]: '.concat(err));
   }
 });
 
 // POST route to link songs to a user in Airtable
 app.post('/update-library', async (req, res) => {
-  const { username } = req.body;
-  const airtableIds = null;
+  const { username, startDate, endDate } = req.body;
+  let airtableIds = null;
   let error = '';
-  const success = false;
+  let success = false;
+  let playlistAirtableId;
+  let songAirtableIds;
+
+  // Date parsing
+  const [startY, startM, startD] = startDate.split('.');
+  const [endY, endM, endD] = endDate.split('.');
+  const startDateTime = new Date(startY, parseInt(startM, 10) - 1, startD);
+  const endDateTime = new Date(endY, parseInt(endM, 10) - 1, endD);
+  console.log(startDateTime, endDateTime);
+
   try {
     if (currentUserId === null) {
       error =
@@ -104,59 +104,161 @@ app.post('/update-library', async (req, res) => {
     // Get tracks in the signed in user's Your Music library
     else {
       const songs = (await spotifyAPI.getMySavedTracks({
-        limit: 10,
+        limit: 15,
         offset: 1,
-      })).body.items;
-      console.log(songs);
+      })).body.items
+        .filter((item) => {
+          const dateSaved = new Date(item.added_at);
+          console.log(item.track.name, dateSaved);
+          return (
+            dateSaved.getTime() > startDateTime.getTime() &&
+            dateSaved.getTime() < endDateTime.getTime()
+          );
+        })
+        .map((item) => {
+          const { track } = item;
+          const { name, artists, album, uri } = track;
 
-      // For each song, check if it exists in Airtable already
-      // Otherwise create it
+          return {
+            name,
+            artist: artists
+              .map((artist) => artist.name)
+              .sort()
+              .join(','),
+            album: album.name,
+            spotifyId: track.id,
+            uri,
+          };
+        });
 
-      // Create a playlist with these songs
+      const songPromises = [];
+      songs.forEach((song) => {
+        const songPromise = createSongIfMissing(song);
+        songPromises.push(songPromise);
+      });
+      const songCreationResults = await Promise.all(songPromises);
+      error =
+        songCreationResults
+          .map((result) => result.error)
+          .filter((e) => e !== '').length > 0
+          ? 'Error with adding one or more songs to Airtable'
+          : '';
 
-      // Update user with song IDs ( Airtable gracefully handles duplicates) and new playlist ID
+      if (!error) {
+        // Too lazy to check for database malformation here. At this point, can assume the user you want is the 0th element of the array
+        const userAirtable = (await getUsersByUsername(username))[0];
+
+        songAirtableIds = songCreationResults.map(
+          (result) => result.airtableId
+        );
+
+        // Create a playlist with these songs
+        const playlist = (await spotifyAPI.createPlaylist(username, endDate, {
+          public: false,
+          description: `songs saved between ${startDate} and ${endDate}.`,
+        })).body;
+
+        const tracks = songCreationResults.map((result) => result.uri);
+        console.log(tracks);
+        await spotifyAPI.addTracksToPlaylist(playlist.id, tracks);
+
+        // Update Airtable with playlist mapping
+        playlistAirtableId = await createPlaylist({
+          name: endDate,
+          spotifyId: playlist.id,
+          songIds: songAirtableIds,
+          userId: userAirtable.id,
+        });
+
+        // Update user with song IDs ( Airtable gracefully handles duplicates) and new playlist ID
+        await updateUser(userAirtable.id, {
+          songIds:
+            'songIds' in userAirtable
+              ? Array.from(
+                  new Set(userAirtable.songIds.concat(songAirtableIds))
+                )
+              : songAirtableIds,
+          playlisIds:
+            'playlisIds' in userAirtable
+              ? Array.from(
+                  new Set(userAirtable.playlisIds.append(playlistAirtableId))
+                )
+              : [playlistAirtableId],
+        });
+      }
+      success = true;
+      airtableIds = {
+        playlistId: playlistAirtableId,
+        songIds: songAirtableIds,
+      };
     }
-    if (error) {
+    if (error !== '') {
       res.send({ success, error });
     } else {
       res.send({ success, username, airtableIds });
     }
   } catch (err) {
     res.send({ success, error: err });
-    console.error('[update-library]: '.concat(err));
+    console.error('[/update-library]: '.concat(err));
   }
 });
 
-// Example code from DC Central Kitchen
-// GET route to trigger synch from dev to prod
-app.get('/synch', async (_, res) => {
+// Returns Airtable ID of this song if exists, or creates it
+const createSongIfMissing = async (song) => {
+  let airtableId = null;
+  let error = '';
+  let success = false;
   try {
-    const {
-      newIds,
-      updatedProductNames,
-      updatedProductIds,
-      updatedStoreNames,
-      updatedStoreIds,
-    } = await synchDevProd();
-    res.send({
-      newIds,
-      updatedProductNames,
-      updatedProductIds,
-      updatedStoreNames,
-      updatedStoreIds,
-    });
-  } catch (e) {
-    console.error(e);
+    // Check if in Airtable
+    const existing = await getSongsBySpotifyId(song.spotifyId);
+
+    if (existing.length > 1) {
+      error =
+        'Database malformed! Multiple songs found in Airtable with this ID. Please report an issue so we can fix this for you.';
+      // No song found - create
+    } else if (existing.length === 0) {
+      airtableId = await createSong(song);
+      success = true;
+      // Otherwise, song exists.
+      console.log(song.name, airtableId);
+    } else {
+      airtableId = existing[0].id;
+    }
+  } catch (err) {
+    console.error('[createSongIfMissing]: '.concat(err));
   }
-});
+  return { airtableId, error, success, uri: song.uri };
+};
 
-// Examples of People Power's API routes
-app.get('/approve', async (req, res) => {
-  console.log('Received Approve Request with query:');
-  console.log(req.query);
+// Returns Airtable ID of this user if exists, or creates it
+const createUserIfMissing = async (userInfo) => {
+  let airtableId = null;
+  let error = '';
+  let success = false;
+  try {
+    // Check if in Airtable
+    const existing = await getUsersByUsername(userInfo.id);
 
-  const billId = req.query.id;
-});
+    if (existing.length > 1) {
+      error =
+        'Database malformed! Multiple users found in Airtable with this username. Please report an issue so we can fix this for you.';
+      // No user found - create
+    } else if (existing.length === 0) {
+      airtableId = await createUser({
+        name: userInfo.display_name,
+        email: userInfo.email,
+        username: userInfo.id,
+      });
+      success = true;
+      // Otherwise, user exists.
+    } else {
+      airtableId = existing[0].id;
+    }
+  } catch (err) {
+    console.error('[createUserIfMissing]: '.concat(err));
+  }
+  return { airtableId, error, success };
+};
 
 // Spotify Authentication
 app.get('/login', (_, res) => {
@@ -237,7 +339,7 @@ app.get('/refresh_token', async (_, res) => {
       accessToken: newAccessToken,
     });
   } catch (err) {
-    console.error('[refresh_token]: '.concat(err));
+    console.error('[/refresh_token]: '.concat(err));
   }
 });
 
