@@ -92,7 +92,6 @@ app.post('/update-library', async (req, res) => {
   const [endY, endM, endD] = endDate.split('.');
   const startDateTime = new Date(startY, parseInt(startM, 10) - 1, startD);
   const endDateTime = new Date(endY, parseInt(endM, 10) - 1, endD);
-  console.log(startDateTime, endDateTime);
 
   try {
     if (currentUserId === null) {
@@ -109,7 +108,6 @@ app.post('/update-library', async (req, res) => {
       })).body.items
         .filter((item) => {
           const dateSaved = new Date(item.added_at);
-          console.log(item.track.name, dateSaved);
           return (
             dateSaved.getTime() > startDateTime.getTime() &&
             dateSaved.getTime() < endDateTime.getTime()
@@ -159,7 +157,6 @@ app.post('/update-library', async (req, res) => {
         })).body;
 
         const tracks = songCreationResults.map((result) => result.uri);
-        console.log(tracks);
         await spotifyAPI.addTracksToPlaylist(playlist.id, tracks);
 
         // Update Airtable with playlist mapping
@@ -220,7 +217,6 @@ const createSongIfMissing = async (song) => {
       airtableId = await createSong(song);
       success = true;
       // Otherwise, song exists.
-      console.log(song.name, airtableId);
     } else {
       airtableId = existing[0].id;
     }
