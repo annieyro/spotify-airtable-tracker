@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html>
   <head>
-    <title>Example of the Authorization Code flow with Spotify</title>
+    <title>Authorize with Spotify to get started</title>
     <link
       rel="stylesheet"
       href="//netdna.bootstrapcdn.com/bootstrap/3.1.1/css/bootstrap.min.css"
@@ -23,7 +23,7 @@
   <body>
     <div class="container">
       <div id="login">
-        <h1>This is an example of the Authorization Code flow</h1>
+        <h1>Authorization</h1>
         <a href="/login" class="btn btn-primary">Log in with Spotify</a>
       </div>
       <div id="loggedin">
@@ -37,6 +37,7 @@
 
     <script id="user-profile-template" type="text/x-handlebars-template">
       <h1>Logged in as {{display_name}}</h1>
+      <h2>Make some API calls to Postman to get started!</h2>
       <div class="media">
         <div class="pull-left">
           <img class="media-object" width="150" src="{{images.0.url}}" />
@@ -44,7 +45,7 @@
         <div class="media-body">
           <dl class="dl-horizontal">
             <dt>Display name</dt><dd class="clearfix">{{display_name}}</dd>
-            <dt>Id</dt><dd>{{id}}</dd>
+            <dt>ID</dt><dd>{{id}}</dd>
             <dt>Email</dt><dd>{{email}}</dd>
             <dt>Spotify URI</dt><dd><a href="{{external_urls.spotify}}">{{external_urls.spotify}}</a></dd>
             <dt>Link</dt><dd><a href="{{href}}">{{href}}</a></dd>
@@ -58,8 +59,8 @@
     <script id="oauth-template" type="text/x-handlebars-template">
       <h2>oAuth info</h2>
       <dl class="dl-horizontal">
-        <dt>Access token</dt><dd class="text-overflow">{{access_token}}</dd>
-        <dt>Refresh token</dt><dd class="text-overflow">{{refresh_token}}</dd>
+        <dt>Access Token: </dt><dd class="text-overflow">{{accessToken}}</dd>
+        <dt>Refresh Token: </dt><dd class="text-overflow">{{refreshToken}}</dd>
       </dl>
     </script>
 
@@ -93,24 +94,25 @@
 
         var params = getHashParams();
 
-        var access_token = params.access_token,
-          refresh_token = params.refresh_token,
+        var accessToken = params.accessToken,
+          refreshToken = params.refreshToken,
+          expiresIn = params.expiresIn,
           error = params.error;
 
         if (error) {
           alert('There was an error during the authentication');
         } else {
-          if (access_token) {
+          if (accessToken) {
             // render oauth info
             oauthPlaceholder.innerHTML = oauthTemplate({
-              access_token: access_token,
-              refresh_token: refresh_token,
+              accessToken: accessToken,
+              refreshToken: refreshToken,
             });
 
             $.ajax({
               url: 'https://api.spotify.com/v1/me',
               headers: {
-                Authorization: 'Bearer ' + access_token,
+                Authorization: 'Bearer ' + accessToken,
               },
               success: function(response) {
                 userProfilePlaceholder.innerHTML = userProfileTemplate(
@@ -132,14 +134,11 @@
             function() {
               $.ajax({
                 url: '/refresh_token',
-                data: {
-                  refresh_token: refresh_token,
-                },
               }).done(function(data) {
-                access_token = data.access_token;
+                accessToken = data.accessToken;
                 oauthPlaceholder.innerHTML = oauthTemplate({
-                  access_token: access_token,
-                  refresh_token: refresh_token,
+                  accessToken: accessToken,
+                  refreshToken: refreshToken,
                 });
               });
             },
