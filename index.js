@@ -27,7 +27,9 @@ const spotifyAPI = new SpotifyWebApi({
   clientSecret: CLIENT_SECRET,
   redirectUri: REDIRECT_URI,
 });
-const stateKey = 'spotify_auth_state';
+const stateKey = 'spotify_auth';
+
+let currentUserId = null;
 
 // GET route as a sanity check when deploying
 app.get('/', (_, res) => {
@@ -36,12 +38,55 @@ app.get('/', (_, res) => {
   );
 });
 
+/* POST routes: expect body to contain {username: <SPOTIFY_USERNAME} and only succeed if currently signed in */
+
 // POST route to create a user in Airtable
 app.post('/create-user', async (req, res) => {
   console.log('Received Create User with body:');
   console.log(req.body);
-  const userId = await createUser(req.body);
-  res.send({ userId });
+  const requestedUserId = req.body.id;
+  if (!currentUserId === requestedUserId) {
+    res.send({
+      error: 'Can only update library of the currently signed in user',
+    });
+    return;
+  }
+  const userInfo = (await spotifyAPI.getMe()).body;
+  console.log(userInfo);
+
+  const airtableId = await createUser({
+    name: userInfo.display_name,
+    email: userInfo.email,
+    username: userInfo.id,
+  });
+  res.send({ username: requestedUserId, airtableId });
+});
+
+// POST route to link songs to a user in Airtable
+app.post('/update-library', async (req, res) => {
+  const requestedUserId = req.body.id;
+  if (!currentUserId === requestedUserId) {
+    res.send({
+      error: 'Can only update library of the currently signed in user',
+    });
+  }
+  // Get tracks in the signed in user's Your Music library
+  try {
+    const data = await spotifyAPI.getMySavedTracks({
+      limit: 10,
+      offset: 1,
+    });
+    console.log(data);
+
+    // For each song, check if it exists in Airtable already
+    // Otherwise create it
+
+    // Create a playlist with these songs
+
+    // Update user with song IDs ( Airtable gracefully handles duplicates) and new playlist ID
+  } catch (err) {
+    console.error('[update-library]: '.concat(err));
+  }
 });
 
 // Example code from DC Central Kitchen
@@ -68,14 +113,6 @@ app.get('/synch', async (_, res) => {
 });
 
 // Examples of People Power's API routes
-app.post('/invite', async (req, res) => {
-  console.log('Received Invite Request with body:');
-  console.log(req.body);
-
-  // const confirmSend =  await sendInviteEmail(req.body.pledgeInviteId);
-  const confirmSend = 'dummy';
-});
-
 app.get('/approve', async (req, res) => {
   console.log('Received Approve Request with query:');
   console.log(req.query);
@@ -83,6 +120,7 @@ app.get('/approve', async (req, res) => {
   const billId = req.query.id;
 });
 
+// Spotify Authentication
 app.get('/login', (req, res) => {
   const state = generateRandomString(16);
   // your application requests authorization
@@ -91,18 +129,7 @@ app.get('/login', (req, res) => {
   res.cookie(stateKey, state);
 
   const authorizeUrl = spotifyAPI.createAuthorizeURL(scopes, state);
-  // const loginURI = `https://accounts.spotify.com/authorize?${querystring.stringify(
-  //   {
-  //     response_type: 'code',
-  //     client_id: CLIENT_ID,
-  //     scopes,
-  //     redirect_uri: REDIRECT_URI,
-  //     state,
-  //   }
-  // )}`;
 
-  // console.log('authUrl', authorizeUrl);
-  // console.log('loginUrl', loginURI);
   res.redirect(authorizeUrl);
 });
 
@@ -134,6 +161,9 @@ app.get('/callback', async (req, res) => {
       // Set the access token on the API object to use it in later calls
       spotifyAPI.setAccessToken(accessToken);
       spotifyAPI.setRefreshToken(refreshToken);
+
+      const userInfo = await spotifyAPI.getMe();
+      currentUserId = userInfo.body.id;
 
       // Pass the token to the browser for `index.html` to render FE properly
       res.redirect(
