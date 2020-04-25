@@ -4,7 +4,7 @@ import dotenv from 'dotenv-safe';
 import express from 'express';
 import querystring from 'querystring';
 import SpotifyWebApi from 'spotify-web-api-node';
-import { createUser } from './lib/airtable/request';
+import { createUser, getUsersByUsername } from './lib/airtable/request';
 import { generateRandomString } from './lib/helpers';
 import { synchDevProd } from './utils/synchDevProd';
 
@@ -44,47 +44,85 @@ app.get('/', (_, res) => {
 app.post('/create-user', async (req, res) => {
   console.log('Received Create User with body:');
   console.log(req.body);
-  const requestedUserId = req.body.id;
-  if (!currentUserId === requestedUserId) {
-    res.send({
-      error: 'Can only update library of the currently signed in user',
-    });
-    return;
-  }
-  const userInfo = (await spotifyAPI.getMe()).body;
-  console.log(userInfo);
+  const { username } = req.body;
+  let airtableId = null;
+  let error = '';
+  let success = false;
+  try {
+    if (currentUserId === null) {
+      error =
+        'Access to Spotify API denied. Please authorize Spotify at localhost:3000 before continuing!';
+    } else if (!currentUserId === username) {
+      error = 'May only take action for the currently authorized Spotify user';
+    } else {
+      const userInfo = (await spotifyAPI.getMe()).body;
 
-  const airtableId = await createUser({
-    name: userInfo.display_name,
-    email: userInfo.email,
-    username: userInfo.id,
-  });
-  res.send({ username: requestedUserId, airtableId });
+      // Check if in Airtable
+      const existing = await getUsersByUsername(username);
+      console.log(username);
+      console.log(existing);
+      if (existing.length > 1) {
+        error =
+          'Database malformed! Multiple users found in Airtable with this username. Please report an issue so we can fix this for you.';
+        // No user found - create
+      } else if (existing.length === 0) {
+        airtableId = await createUser({
+          name: userInfo.display_name,
+          email: userInfo.email,
+          username: userInfo.id,
+        });
+        success = true;
+        // Otherwise, user exists.
+      } else {
+        airtableId = existing[0].id;
+      }
+    }
+    if (error) {
+      res.send({ success, error });
+    } else {
+      res.send({ success, username, airtableId });
+    }
+  } catch (err) {
+    res.send({ success, error: err });
+    console.error('[create-user]: '.concat(err));
+  }
 });
 
 // POST route to link songs to a user in Airtable
 app.post('/update-library', async (req, res) => {
-  const requestedUserId = req.body.id;
-  if (!currentUserId === requestedUserId) {
-    res.send({
-      error: 'Can only update library of the currently signed in user',
-    });
-  }
-  // Get tracks in the signed in user's Your Music library
+  const { username } = req.body;
+  const airtableIds = null;
+  let error = '';
+  const success = false;
   try {
-    const data = await spotifyAPI.getMySavedTracks({
-      limit: 10,
-      offset: 1,
-    });
-    console.log(data);
+    if (currentUserId === null) {
+      error =
+        'Access to Spotify API denied. Please authorize Spotify at localhost:3000 before continuing!';
+    } else if (!currentUserId === username) {
+      error = 'May only take action for the currently authorized Spotify user';
+    }
+    // Get tracks in the signed in user's Your Music library
+    else {
+      const songs = (await spotifyAPI.getMySavedTracks({
+        limit: 10,
+        offset: 1,
+      })).body.items;
+      console.log(songs);
 
-    // For each song, check if it exists in Airtable already
-    // Otherwise create it
+      // For each song, check if it exists in Airtable already
+      // Otherwise create it
 
-    // Create a playlist with these songs
+      // Create a playlist with these songs
 
-    // Update user with song IDs ( Airtable gracefully handles duplicates) and new playlist ID
+      // Update user with song IDs ( Airtable gracefully handles duplicates) and new playlist ID
+    }
+    if (error) {
+      res.send({ success, error });
+    } else {
+      res.send({ success, username, airtableIds });
+    }
   } catch (err) {
+    res.send({ success, error: err });
     console.error('[update-library]: '.concat(err));
   }
 });
@@ -121,10 +159,16 @@ app.get('/approve', async (req, res) => {
 });
 
 // Spotify Authentication
-app.get('/login', (req, res) => {
+app.get('/login', (_, res) => {
   const state = generateRandomString(16);
   // your application requests authorization
-  const scopes = ['user-read-private', 'user-read-email'];
+  const scopes = [
+    'user-read-private',
+    'user-read-email',
+    'user-library-read',
+    'playlist-read-private',
+    'playlist-modify-private',
+  ];
 
   res.cookie(stateKey, state);
 

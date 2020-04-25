@@ -60,7 +60,7 @@
     "schemaMeta": {
       "User": {
         "lookupFields": [
-          "Email"
+          "Username"
         ]
       }
     }
