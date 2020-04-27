@@ -103,7 +103,7 @@ app.post('/update-library', async (req, res) => {
     // Get tracks in the signed in user's Your Music library
     else {
       const songs = (await spotifyAPI.getMySavedTracks({
-        limit: 15,
+        limit: 50,
         offset: 1,
       })).body.items
         .filter((item) => {
