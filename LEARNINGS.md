@@ -22,6 +22,8 @@ Using the `async/await` syntax makes code a lot prettier, but it introduces its 
 
 Spotify has an example auth flow on its Web API Quickstart page, but we found that it did not translate very well to our Node app; it was bulky and stylistically difficult to parse. We spent some time refactoring the existing code. Notably, once the naive flow worked, we decided to integrate a convenient wrapper API to abstract away some of the repetitive tasks in order to effectively utilize the Spotify API.
 
+Finally, working with the Spotify API is relatively straightforward. One thing we often did was `console.log` the data we were receiving to justify our assumptions about what types of objects and object properties existed in the response. This helped us understand how to best manipulate the data to get it in the format we wanted for Airtable.
+
 ## Next steps
 
 Add more fun functionality with various endpoints! With the existing endpoints, we've established the building blocks to do much more with the Spotify API and a linked Airtable base. We can expand what attributes we store in Airtable if we like, or add more tables. Finally, of course we could always build out a lightweight frontend.
