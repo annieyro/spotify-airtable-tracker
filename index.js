@@ -166,7 +166,13 @@ app.post('/update-library', async (req, res) => {
           songIds: songAirtableIds,
           userId: userAirtable.id,
         });
-
+        let playlistSet;
+        if ('playlisIds' in userAirtable) {
+          userAirtable.playlisIds.push(playlistAirtableId);
+          playlistSet = Array.from(new Set(userAirtable.playlisIds));
+        } else {
+          userAirtable.playlisIds = playlistAirtableId;
+        }
         // Update user with song IDs ( Airtable gracefully handles duplicates) and new playlist ID
         await updateUser(userAirtable.id, {
           songIds:
@@ -175,12 +181,7 @@ app.post('/update-library', async (req, res) => {
                   new Set(userAirtable.songIds.concat(songAirtableIds))
                 )
               : songAirtableIds,
-          playlisIds:
-            'playlisIds' in userAirtable
-              ? Array.from(
-                  new Set(userAirtable.playlisIds.append(playlistAirtableId))
-                )
-              : [playlistAirtableId],
+          playlisIds: playlistSet,
         });
       }
       success = true;
@@ -197,6 +198,104 @@ app.post('/update-library', async (req, res) => {
   } catch (err) {
     res.send({ success, error: err });
     console.error('[/update-library]: '.concat(err));
+  }
+});
+
+// POST route to link songs to a user in Airtable
+app.post('/add-playlist', async (req, res) => {
+  const { username, playlistId } = req.body;
+  let airtableIds = null;
+  let error = '';
+  let success = false;
+  let playlistAirtableId;
+  let songAirtableIds;
+  let playlist;
+
+  try {
+    if (currentUserId === null) {
+      error =
+        'Access to Spotify API denied. Please authorize Spotify at localhost:3000 before continuing!';
+    } else if (!currentUserId === username) {
+      error = 'May only take action for the currently authorized Spotify user';
+    }
+    // Get tracks in the signed in user's Your Music library
+    else {
+      playlist = (await spotifyAPI.getPlaylist(playlistId)).body;
+      const songs = playlist.tracks.items.map((item) => {
+        const { track } = item;
+        const { name, artists, album, uri } = track;
+
+        return {
+          name,
+          artist: artists
+            .map((artist) => artist.name)
+            .sort()
+            .join(','),
+          album: album.name,
+          spotifyId: track.id,
+          uri,
+        };
+      });
+      const songPromises = [];
+      songs.forEach((song) => {
+        const songPromise = createSongIfMissing(song);
+        songPromises.push(songPromise);
+      });
+      const songCreationResults = await Promise.all(songPromises);
+      error =
+        songCreationResults
+          .map((result) => result.error)
+          .filter((e) => e !== '').length > 0
+          ? 'Error with adding one or more songs to Airtable'
+          : '';
+      if (!error) {
+        // Too lazy to check for database malformation here. At this point, can assume the user you want is the 0th element of the array
+        const userAirtable = (await getUsersByUsername(username))[0];
+        songAirtableIds = songCreationResults.map(
+          (result) => result.airtableId
+        );
+        const tracks = songCreationResults.map((result) => result.uri);
+
+        // Update Airtable with playlist mapping
+        playlistAirtableId = await createPlaylist({
+          name: playlist.name,
+          spotifyId: playlist.id,
+          songIds: songAirtableIds,
+          userId: userAirtable.id,
+        });
+        // Update user with song IDs ( Airtable gracefully handles duplicates) and new playlist ID
+        let playlistSet;
+        if ('playlisIds' in userAirtable) {
+          userAirtable.playlisIds.push(playlistAirtableId);
+          playlistSet = Array.from(new Set(userAirtable.playlisIds));
+        } else {
+          userAirtable.playlisIds = playlistAirtableId;
+        }
+        playlistSet = Array.from(new Set(userAirtable.playlisIds));
+        await updateUser(userAirtable.id, {
+          songIds:
+            'songIds' in userAirtable
+              ? Array.from(
+                  new Set(userAirtable.songIds.concat(songAirtableIds))
+                )
+              : songAirtableIds,
+          playlisIds: playlistSet,
+        });
+      }
+      success = true;
+      airtableIds = {
+        playlistId: playlistAirtableId,
+        songIds: songAirtableIds,
+      };
+    }
+    if (error !== '') {
+      res.send({ success, error });
+    } else {
+      res.send({ success, username, airtableIds });
+    }
+  } catch (err) {
+    res.send({ success, error: err });
+    console.error('[/add-playlist]: '.concat(err));
   }
 });
 
